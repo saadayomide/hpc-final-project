@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Apptainer/Singularity
+*.sif
+*.simg
+env/project.sif
+
+# Data
+data/train/
+data/val/
+data/test/
+*.h5
+*.hdf5
+*.npz
+*.pkl
+*.pickle
+
+# Results
+results/*
+!results/.gitkeep
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.out
+*.err
+
+# Profiling
+*.qdrep
+*.nsys-rep
+*.prof
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
