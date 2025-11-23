@@ -2,20 +2,22 @@
 
 This directory contains project documentation.
 
-## Documents
+## Phase 3: Profiling & Bottleneck Identification
 
-- **paper.pdf**: Research paper describing the project
-- **eurohpc_proposal.pdf**: EuroHPC proposal document
-- **slides.pdf**: Presentation slides
+**Main Guide:** `PHASE3_PROFILING.md`
 
-## Project Abstract
+Complete guide for Phase 3 profiling, including:
+- Quick start instructions
+- Profiling methodology
+- Tool usage (Nsight Systems)
+- Expected outcomes
+- Troubleshooting
 
-### Problem Statement
-[To be filled - 200 words describing the problem, approach, and success metrics]
+## Other Documentation
 
-### Approach
-[To be filled]
-
-### Success Metrics
-[To be filled]
-
+- Project overview: See main `README.md` in project root
+- Project details: `PROJECT_EXPLANATION.md`
+- Data strategy: `DATA_STRATEGY.md`
+- Filesystem: `FILESYSTEM.md`
+- System info: `SYSTEM.md`
+- Reproduction: `reproduce.md`

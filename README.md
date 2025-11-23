@@ -14,14 +14,26 @@ Success metrics include: (1) achieving linear scaling efficiency above 80% when 
 repo/
 ├── src/            # DCRNN code: train.py, data.py, model/, utils/
 ├── env/            # Apptainer recipe (project.def)
-├── slurm/          # sbatch scripts (1N, multi-N, profiling), run.sh wrapper
+├── slurm/          # sbatch scripts (1N, multi-N, profiling)
+├── scripts/        # Automation scripts (scaling, profiling, analysis)
 ├── data/           # Dataset + fetch_data.sh + README
-├── results/        # CSV, PNG/SVG plots, sacct logs, profiler outputs
-├── docs/           # paper.pdf, eurohpc_proposal.pdf, slides.pdf, README.md
+├── results/        # Results (scaling, profiling, plots)
+│   └── profiling/  # Phase 3 profiling results and analysis
+├── docs/           # Documentation (papers, proposals, Phase 3 guide)
 ├── reproduce.md    # Exact commands + seeds + git hash
 ├── SYSTEM.md       # Node types, module list, driver/runtime versions
 └── run.sh          # Container build and execution wrapper
 ```
+
+## Documentation
+
+- **README.md** (this file) - Project overview and quick start
+- **docs/PHASE3_PROFILING.md** - Complete Phase 3 profiling guide
+- **PROJECT_EXPLANATION.md** - Detailed project description
+- **DATA_STRATEGY.md** - Data management strategy
+- **FILESYSTEM.md** - Filesystem usage guidelines
+- **SYSTEM.md** - System configuration details
+- **reproduce.md** - Reproduction instructions
 
 ## Quick Start
 

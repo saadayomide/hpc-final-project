@@ -19,6 +19,17 @@ build_container() {
     echo -e "${YELLOW}Building Apptainer container...${NC}"
     cd "${SCRIPT_DIR}/env"
     
+    # Use scratch directory for cache and temp files to avoid home directory space issues
+    SCRATCH_DIR="/scratch/user42"
+    if [ -d "${SCRATCH_DIR}" ]; then
+        export APPTAINER_CACHEDIR="${SCRATCH_DIR}/.apptainer_cache"
+        export APPTAINER_TMPDIR="${SCRATCH_DIR}/.apptainer_tmp"
+        mkdir -p "${APPTAINER_CACHEDIR}" "${APPTAINER_TMPDIR}"
+        echo -e "${YELLOW}Using scratch directory for Apptainer cache: ${APPTAINER_CACHEDIR}${NC}"
+    else
+        echo -e "${YELLOW}Warning: Scratch directory not found, using default cache location${NC}"
+    fi
+    
     if [ -f "${CONTAINER_NAME}" ]; then
         echo -e "${YELLOW}Container already exists. Use --force to rebuild.${NC}"
         if [ "$1" != "--force" ]; then
