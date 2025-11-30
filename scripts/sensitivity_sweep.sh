@@ -7,17 +7,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_DIR}"
 
-# Configuration
-ACCOUNT="<account>"
-PARTITION="<partition>"
-NODES=2  # Fixed number of nodes
+# Configuration - EDIT THESE
+ACCOUNT="def-sponsor00"
+PARTITION="gpu"
+NODES=2
 GPUS_PER_NODE=4
 CPUS_PER_TASK=8
 EPOCHS=1
 PRECISION="bf16"
 
 # Sweep parameters
-BATCH_SIZES=(32 64 128)
+BATCH_SIZES=(32 64 128 256)
 NUM_WORKERS_LIST=(2 4 8)
 
 echo "Starting sensitivity sweep experiments..."
@@ -43,7 +43,7 @@ for BATCH_SIZE in "${BATCH_SIZES[@]}"; do
         
         # Create temporary sbatch script
         SBATCH_SCRIPT="${RESULTS_DIR}/job.sbatch"
-        cat > "${SBATCH_SCRIPT}" << EOF
+        cat > "${SBATCH_SCRIPT}" << SBATCH_EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=${ACCOUNT}
@@ -65,26 +65,26 @@ cd "${PROJECT_DIR}"
 MASTER_ADDR=\$(scontrol show hostnames "\$SLURM_JOB_NODELIST" | head -n 1)
 MASTER_PORT=29500
 
-srun --ntasks-per-node=4 --gpus-per-task=1 \
-  ./run.sh python -m torch.distributed.run \
-  --nproc_per_node=4 \
-  --nnodes=${NODES} \
-  --node_rank=\${SLURM_NODEID} \
-  --master_addr=\${MASTER_ADDR} \
-  --master_port=\${MASTER_PORT} \
-  src/train.py \
-  --data ./data \
-  --epochs ${EPOCHS} \
-  --batch-size ${BATCH_SIZE} \
-  --precision ${PRECISION} \
-  --num-workers ${NUM_WORKERS} \
-  --results "${RESULTS_DIR}" \
-  --seed 42 \
-  --monitor-gpu \
+srun --ntasks-per-node=4 --gpus-per-task=1 \\
+  ./run.sh python -m torch.distributed.run \\
+  --nproc_per_node=4 \\
+  --nnodes=${NODES} \\
+  --node_rank=\${SLURM_NODEID} \\
+  --master_addr=\${MASTER_ADDR} \\
+  --master_port=\${MASTER_PORT} \\
+  src/train.py \\
+  --data ./data \\
+  --epochs ${EPOCHS} \\
+  --batch-size ${BATCH_SIZE} \\
+  --num-workers ${NUM_WORKERS} \\
+  --precision ${PRECISION} \\
+  --results "${RESULTS_DIR}" \\
+  --seed 42 \\
+  --monitor-gpu \\
   --monitor-cpu
 
 sacct -j \${SLURM_JOB_ID} --format=JobID,JobName,State,ExitCode,Elapsed,TotalCPU,MaxRSS,MaxVMSize,ReqMem,AllocCPUs,AllocGRES,NodeList > "${RESULTS_DIR}/sacct_summary.txt"
-EOF
+SBATCH_EOF
         
         chmod +x "${SBATCH_SCRIPT}"
         
@@ -92,7 +92,7 @@ EOF
         echo "Submitting job..."
         JOB_ID=$(sbatch "${SBATCH_SCRIPT}" | awk '{print $4}')
         echo "Job ID: ${JOB_ID}"
-        echo "Results will be saved to: ${RESULTS_DIR}"
+        echo "Results: ${RESULTS_DIR}"
     done
 done
 
@@ -105,6 +105,5 @@ echo ""
 echo "To check job status:"
 echo "  squeue -u \$USER"
 echo ""
-echo "To collect results after jobs complete, run:"
+echo "To analyze results after jobs complete, run:"
 echo "  python scripts/analyze_scaling.py --results ${RESULTS_BASE} --type sensitivity"
-

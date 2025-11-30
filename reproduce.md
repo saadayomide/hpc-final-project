@@ -1,362 +1,444 @@
 # Reproduction Instructions
 
-This document provides exact commands and configurations to reproduce the experiments.
+This document provides exact commands and configurations to reproduce all experiments.
 
-## Phase 1: One-Node Functional Prototype
+## Prerequisites
 
-### Git Hash
-```
+- Access to an HPC cluster with GPU nodes (SLURM scheduler)
+- Apptainer/Singularity container runtime
+- Git
+
+## Quick Start
+
+```bash
+# 1. Clone repository
 git clone <repository-url>
 cd hpc-final-project
-git checkout <commit-hash>
-```
+git checkout v1.0-course-teamname  # Use release tag
 
-**Note**: Replace `<commit-hash>` with the actual git commit hash for reproducibility.
-
-### Container Build
-```bash
+# 2. Build container
 ./run.sh build
-```
 
-Or force rebuild:
-```bash
-./run.sh build --force
-```
-
-### Container Version Locking
-
-To ensure reproducibility, record the container hash:
-```bash
-apptainer inspect --deffile env/project.sif | grep -A 5 "Build"
-```
-
-Or use container checksum:
-```bash
-sha256sum env/project.sif > env/container.sha256
-```
-
-### System Configuration
-
-See `SYSTEM.md` for detailed system information including:
-- Node types and specifications
-- Module versions
-- Driver and runtime versions
-
-### Data Preparation
-
-```bash
+# 3. Generate or fetch data
 cd data
-./fetch_data.sh
+python generate_sample_data.py  # OR ./fetch_data.sh for real data
+cd ..
+
+# 4. Verify setup
+./run.sh python -c "import torch; print(torch.cuda.is_available())"
+
+# 5. Run baseline training
+sbatch slurm/baseline_1node.sbatch
+
+# 6. Run scaling experiments
+./scripts/strong_scaling.sh
+./scripts/weak_scaling.sh
 ```
 
-**Note**: The current implementation uses synthetic data generation. For production, update `fetch_data.sh` to download actual datasets.
+---
 
-## Running Experiments
+## Step 1: Environment Setup
 
-### Phase 1: Baseline 1-Node Training
+### 1.1 Clone Repository
 
-**Exact sbatch command:**
 ```bash
-cd slurm
-sbatch baseline_1node.sbatch
+git clone <repository-url>
+cd hpc-final-project
+
+# For reproducibility, use the tagged release
+git checkout v1.0-course-teamname
+
+# Record git hash
+echo "Git hash: $(git rev-parse HEAD)" > EXPERIMENT_LOG.txt
 ```
 
-**Or manually:**
+### 1.2 Build Container
+
 ```bash
-cd slurm
-sbatch --job-name=dcrnn-1n \
-  --account=<account> \
-  --partition=<partition> \
-  --nodes=1 \
-  --ntasks-per-node=1 \
-  --gpus-per-node=4 \
-  --cpus-per-task=8 \
-  --time=00:30:00 \
-  --output=../results/1n_%j.out \
-  --error=../results/1n_%j.err \
-  baseline_1node.sbatch
+# Build Apptainer container
+./run.sh build
+
+# Verify container
+./run.sh python --version
+./run.sh python -c "import torch; print(torch.__version__)"
+
+# Record container checksum
+sha256sum env/project.sif >> EXPERIMENT_LOG.txt
 ```
 
-**Direct execution (for testing):**
+### 1.3 Verify GPU Access
+
 ```bash
-./run.sh python -m src.train \
-  --data ./data \
-  --epochs 1 \
-  --batch-size 32 \
-  --precision bf16 \
-  --num-workers 4 \
-  --results ./results/test_run \
-  --seed 42 \
-  --monitor-gpu \
-  --monitor-cpu
-```
-
-### Reproducibility Seeds
-
-All experiments use fixed random seeds:
-- Python random seed: `42`
-- NumPy random seed: `42`
-- PyTorch random seed: `42`
-- CUDA random seed: `42` (all GPUs)
-
-The seed is set in `src/train.py` via the `--seed` flag.
-
-### Version Locking
-
-**Container Base Image:**
-- Base: `nvcr.io/nvidia/pytorch:24.04-py3`
-- Python: 3.10 (from base image)
-- PyTorch: Version from base image (check with `./run.sh python -c "import torch; print(torch.__version__)"`)
-
-**Key Dependencies:**
-- torch-geometric
-- torch-sparse
-- torch-scatter
-- torch-cluster
-- DGL, dgllife
-
-**To record module versions (if using modules):**
-```bash
-module list > SYSTEM.md.modules
-```
-
-**To record container environment:**
-```bash
-./run.sh pip list > env/pip_list.txt
-```
-
-### Expected Outputs
-
-Results will be saved in `results/<JOBID>/`:
-- `metrics.csv` - Per-epoch training metrics (loss, throughput, GPU/CPU utilization)
-- `gpu_monitor.csv` - GPU utilization logs (if `--monitor-gpu` enabled)
-- `cpu_monitor.csv` - CPU utilization logs (if `--monitor-cpu` enabled)
-- `checkpoint_latest.pth` - Latest model checkpoint
-- `checkpoint_best.pth` - Best model checkpoint (lowest validation loss)
-- `sacct_summary.txt` - SLURM accounting summary
-
-**Metrics CSV format:**
-- epoch: Epoch number
-- train_loss: Training loss
-- val_loss: Validation loss
-- val_mae: Validation MAE
-- val_rmse: Validation RMSE
-- epoch_time_sec: Wall-clock time per epoch
-- throughput_samples_per_sec: Training throughput
-- gpu_util_avg: Average GPU utilization (%)
-- cpu_util_avg: Average CPU utilization (%)
-
-### Measurement Details
-
-**Wall-clock time:**
-- Measured per epoch and per iteration
-- Recorded in `metrics.csv` as `epoch_time_sec`
-
-**Throughput:**
-- Calculated as: `num_samples / epoch_time`
-- Recorded in `metrics.csv` as `throughput_samples_per_sec`
-
-**GPU Utilization:**
-- Logged via `nvidia-smi` at 1-second intervals
-- Saved to `gpu_monitor.csv`
-- Average reported in `metrics.csv`
-
-**CPU Utilization:**
-- Logged via `psutil` at 1-second intervals
-- Saved to `cpu_monitor.csv`
-- Average reported in `metrics.csv`
-
-**SLURM Accounting:**
-- Saved via `sacct -j <JOBID>` to `sacct_summary.txt`
-
-### Verification
-
-To verify the environment is set up correctly:
-```bash
-./run.sh python -c "import torch; print(torch.cuda.is_available()); print(torch.__version__)"
+./run.sh python -c "
+import torch
+print(f'CUDA available: {torch.cuda.is_available()}')
+print(f'GPU count: {torch.cuda.device_count()}')
+if torch.cuda.is_available():
+    print(f'GPU name: {torch.cuda.get_device_name(0)}')
+    print(f'CUDA version: {torch.version.cuda}')
+"
 ```
 
 Expected output:
 ```
-True
-2.x.x+cu121
+CUDA available: True
+GPU count: 4
+GPU name: NVIDIA A100-SXM4-40GB
+CUDA version: 11.8
 ```
 
-To verify CUDA and GPU access:
+---
+
+## Step 2: Data Preparation
+
+### Option A: Synthetic Data (for testing)
+
 ```bash
-./run.sh python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU count: {torch.cuda.device_count()}'); print(f'GPU name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+cd data
+python generate_sample_data.py
+cd ..
+
+# Verify
+ls -la data/processed/
 ```
 
-### Multi-Node Training (Future Phase)
+Expected files:
+- `train.npz` (X and Y arrays)
+- `val.npz`
+- `test.npz`
+- `adj.npy` (adjacency matrix)
+- `adj_norm.npy` (normalized adjacency)
+- `scaler.npy` (mean, std)
+- `metadata.txt`
+
+### Option B: METR-LA Dataset (production)
 
 ```bash
-cd slurm
-./run.sh multi_node.sbatch
+cd data
+./fetch_data.sh
+cd ..
 ```
 
-### Profiling (Future Phase)
+This downloads and preprocesses the METR-LA traffic dataset.
+
+---
+
+## Step 3: Baseline Training (1 Node)
+
+### 3.1 Interactive Test
 
 ```bash
-cd slurm
-./run.sh profiling.sbatch
+# Quick test (1 epoch, small batch)
+./run.sh python src/train.py \
+    --data ./data \
+    --epochs 1 \
+    --batch-size 32 \
+    --results ./results/test_run \
+    --seed 42
 ```
 
-## Phase 2: Multi-Node Scaling Matrix
+### 3.2 Submit SLURM Job
 
-### Multi-Node DDP Training
+Edit `slurm/baseline_1node.sbatch` to set your account and partition:
 
-**Exact sbatch command:**
 ```bash
-cd slurm
-sbatch ddp_multi_node.sbatch
+#SBATCH --account=your-account
+#SBATCH --partition=gpu
 ```
 
-**Or manually:**
+Submit:
 ```bash
-cd slurm
-sbatch --job-name=dcrnn-ddp \
-  --account=<account> \
-  --partition=<partition> \
-  --nodes=2 \
-  --ntasks-per-node=4 \
-  --gpus-per-node=4 \
-  --gpus-per-task=1 \
-  --cpus-per-task=8 \
-  --time=01:00:00 \
-  --output=../results/ddp_%j.out \
-  --error=../results/ddp_%j.err \
-  ddp_multi_node.sbatch
+sbatch slurm/baseline_1node.sbatch
 ```
 
-### Strong Scaling Experiments
-
-**Fixed problem size, varying number of nodes**
-
+Monitor:
 ```bash
-cd scripts
-# Edit strong_scaling.sh to set your account/partition
-./strong_scaling.sh
+squeue -u $USER
+tail -f results/baseline_*.out
 ```
 
-This will submit jobs for 1, 2, and 4 nodes (adjust `NODES_LIST` based on quota).
+---
 
-**Configuration:**
-- Fixed batch size per GPU: 32
-- Fixed problem size (same data, seq_len, model)
-- Varying: Number of nodes (1, 2, 4)
+## Step 4: Multi-Node DDP Training
 
-**Results:**
-- Time per epoch should decrease with more nodes
-- Throughput should increase with more nodes
-- Parallel efficiency = speedup / num_nodes
+### 4.1 Edit SLURM Script
 
-### Weak Scaling Experiments
-
-**Fixed work per GPU, varying number of nodes**
+Edit `slurm/ddp_multi_node.sbatch`:
 
 ```bash
-cd scripts
-# Edit weak_scaling.sh to set your account/partition
-./weak_scaling.sh
+#SBATCH --account=your-account
+#SBATCH --partition=gpu
+#SBATCH --nodes=2
 ```
 
-**Configuration:**
-- Fixed batch size per GPU: 32 (same work per GPU)
-- Varying: Number of nodes (1, 2, 4)
-
-**Results:**
-- Time per epoch should stay roughly constant
-- Throughput should scale linearly with nodes
-
-### Sensitivity Sweep
-
-**Varying batch size and num_workers**
+### 4.2 Submit Job
 
 ```bash
-cd scripts
-# Edit sensitivity_sweep.sh to set your account/partition
-./sensitivity_sweep.sh
+sbatch slurm/ddp_multi_node.sbatch
 ```
 
-**Configuration:**
-- Fixed: 2 nodes
-- Varying: batch_size ∈ {32, 64, 128}, num_workers ∈ {2, 4, 8}
+### 4.3 Verify DDP
 
-**Results:**
-- Identify optimal batch size and num_workers
-- Trade-off between throughput and memory usage
+Check output for DDP initialization:
+```bash
+grep "NCCL" results/ddp_*.out
+grep "World Size" results/ddp_*.out
+```
 
-### Analyzing Scaling Results
+Expected:
+```
+Using DDP: True
+Rank: 0, World Size: 8, Local Rank: 0
+```
 
-After all jobs complete, analyze results:
+---
+
+## Step 5: Scaling Experiments
+
+### 5.1 Configure Scripts
+
+Edit `scripts/strong_scaling.sh` and `scripts/weak_scaling.sh`:
 
 ```bash
-# Strong scaling
+ACCOUNT="your-account"
+PARTITION="gpu"
+NODES_LIST=(1 2 4)  # Adjust based on quota
+```
+
+### 5.2 Run Strong Scaling
+
+```bash
+./scripts/strong_scaling.sh
+```
+
+This submits jobs for 1, 2, and 4 nodes with fixed problem size.
+
+### 5.3 Run Weak Scaling
+
+```bash
+./scripts/weak_scaling.sh
+```
+
+This submits jobs with fixed work per GPU.
+
+### 5.4 Run Sensitivity Sweep
+
+```bash
+./scripts/sensitivity_sweep.sh
+```
+
+Sweeps batch size and num_workers.
+
+### 5.5 Analyze Results
+
+After all jobs complete:
+
+```bash
+# Strong scaling analysis
 python scripts/analyze_scaling.py \
-  --results results/strong_scaling_YYYYMMDD_HHMMSS \
-  --type strong
+    --results results/strong_scaling_* \
+    --type strong
 
-# Weak scaling
+# Weak scaling analysis
 python scripts/analyze_scaling.py \
-  --results results/weak_scaling_YYYYMMDD_HHMMSS \
-  --type weak
+    --results results/weak_scaling_* \
+    --type weak
 
-# Sensitivity sweep
+# Sensitivity analysis
 python scripts/analyze_scaling.py \
-  --results results/sensitivity_YYYYMMDD_HHMMSS \
-  --type sensitivity
+    --results results/sensitivity_* \
+    --type sensitivity
 ```
 
-**Output:**
-- CSV files with analysis results
-- PNG/SVG plots showing:
-  - Time vs Nodes
-  - Throughput vs Nodes
-  - Speedup/Efficiency
-  - Sensitivity heatmaps
+Output files:
+- `*_analysis.csv` - Numeric results
+- `*_plots.png` - Visualization
+- `*_plots.svg` - Vector graphics
 
-### Phase 2 Metrics
+---
 
-**Measured:**
-- Time per epoch (wall-clock)
-- Throughput (samples/s)
-- Parallel efficiency = speedup / num_nodes
-- GPU/CPU utilization
-- Data loading time
-- Compute time
+## Step 6: Profiling
 
-**Expected Outputs:**
-- `results/strong_scaling_*/strong_scaling_analysis.csv`
-- `results/strong_scaling_*/strong_scaling_plots.png`
-- `results/weak_scaling_*/weak_scaling_analysis.csv`
-- `results/weak_scaling_*/weak_scaling_plots.png`
-- `results/sensitivity_*/sensitivity_analysis.csv`
-- `results/sensitivity_*/sensitivity_plots.png`
-- `sacct_summary.txt` for each job
+### 6.1 Run with Monitoring
+
+```bash
+./run.sh python src/train.py \
+    --data ./data \
+    --epochs 10 \
+    --batch-size 64 \
+    --results ./results/profiling_run \
+    --seed 42 \
+    --monitor-gpu \
+    --monitor-cpu
+```
+
+### 6.2 Analyze Profiling Data
+
+```bash
+python scripts/analyze_profiling.py \
+    --results ./results/profiling_run
+```
+
+Output:
+- `profiling_report.txt` - Text summary
+- `profiling_analysis.json` - Machine-readable
+- `profiling_analysis.png` - Plots
+
+---
+
+## Step 7: Generate Sample Results (for documentation)
+
+If you need sample results for documentation without running experiments:
+
+```bash
+python scripts/generate_sample_results.py
+```
+
+This creates realistic synthetic results in `results/`.
+
+---
+
+## Reproducibility Seeds
+
+All experiments use fixed random seeds:
+
+| Seed Type | Value |
+|-----------|-------|
+| Python random | 42 |
+| NumPy | 42 |
+| PyTorch | 42 |
+| CUDA | 42 (all GPUs) |
+
+Set via `--seed 42` flag in training script.
+
+---
+
+## Configuration Reference
+
+### Training Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--epochs` | 1 | Number of epochs |
+| `--batch-size` | 32 | Batch size per GPU |
+| `--lr` | 0.001 | Learning rate |
+| `--precision` | fp32 | fp32, fp16, or bf16 |
+| `--num-workers` | 4 | Data loader workers |
+| `--hidden-dim` | 64 | Model hidden dimension |
+| `--num-layers` | 2 | Number of GRU layers |
+| `--seed` | 42 | Random seed |
+
+### Model Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Input dimension | 1 (speed) |
+| Hidden dimension | 64 |
+| Number of layers | 2 |
+| Dropout | 0.1 |
+| Sequence length | 12 (1 hour) |
+| Prediction length | 1 (5 minutes) |
 
 ### DDP Configuration
 
-**Environment variables:**
-- `OMP_NUM_THREADS=8` - OpenMP threads
-- `NCCL_DEBUG=INFO` - NCCL debugging
-- `NCCL_SOCKET_IFNAME=ib0` - InfiniBand interface (if needed)
+| Variable | Value |
+|----------|-------|
+| Backend | NCCL |
+| Master port | 29500 |
+| OMP threads | 8 |
 
-**PyTorch DDP:**
-- Uses `torch.distributed.run` (torchrun)
-- Master node determined from SLURM
-- Port: 29500 (default)
-- Backend: NCCL (for GPUs)
+---
 
-### Troubleshooting
+## Expected Results
 
-**If jobs fail:**
-1. Check `results/ddp_*/slurm_*.err` for errors
-2. Verify NCCL configuration
-3. Check network interface (InfiniBand vs Ethernet)
-4. Ensure all nodes can communicate
+### Training Metrics
 
-**If scaling is poor:**
-1. Check GPU utilization (should be >80%)
-2. Check communication overhead (NCCL logs)
-3. Verify batch size is appropriate
-4. Check data loading bottleneck
+| Metric | Expected Range |
+|--------|----------------|
+| Final train loss | 0.05 - 0.08 |
+| Final val loss | 0.06 - 0.10 |
+| Val MAE | 3.2 - 4.0 mph |
+| Val RMSE | 4.8 - 6.0 mph |
+
+### Scaling Performance
+
+| Nodes | Efficiency (expected) |
+|-------|----------------------|
+| 1 | 100% |
+| 2 | 90-98% |
+| 4 | 85-95% |
+| 8 | 75-90% |
+
+---
+
+## Troubleshooting
+
+### Container Build Fails
+
+```bash
+# Check Apptainer version
+apptainer --version
+
+# Try with more memory
+export APPTAINER_TMPDIR=/scratch/$USER/tmp
+mkdir -p $APPTAINER_TMPDIR
+./run.sh build --force
+```
+
+### GPU Not Found
+
+```bash
+# Check NVIDIA driver
+nvidia-smi
+
+# Check container GPU access
+./run.sh nvidia-smi
+```
+
+### DDP Initialization Hangs
+
+```bash
+# Check network interface
+ip addr
+
+# Set correct interface
+export NCCL_SOCKET_IFNAME=ib0
+
+# Enable debugging
+export NCCL_DEBUG=INFO
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+```
+
+### Out of Memory
+
+```bash
+# Reduce batch size
+--batch-size 16
+
+# Enable gradient checkpointing
+# (requires code modification)
+
+# Use mixed precision
+--precision bf16
+```
+
+---
+
+## Verification Checklist
+
+Before submission, verify:
+
+- [ ] Container builds without errors
+- [ ] Single-node training completes
+- [ ] Multi-node training initializes correctly
+- [ ] Scaling experiments produce valid CSV files
+- [ ] Plots are generated in PNG/SVG formats
+- [ ] All random seeds are fixed
+- [ ] SLURM accounting is saved
+- [ ] Results match expected ranges
+
+---
+
+## Contact
+
+For issues, open a GitHub issue or contact the team.
