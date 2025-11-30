@@ -1,0 +1,11 @@
+num_sensors: 207
+num_timesteps: 8640
+seq_len: 12
+pred_len: 1
+train_samples: 6039
+val_samples: 863
+test_samples: 1726
+mean: 43.124810871490006
+std: 15.499632011546092
+seed: 42
+synthetic: True

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=dcrnn-baseline
 #SBATCH --account=def-sponsor00
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-node
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
