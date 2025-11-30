@@ -60,3 +60,10 @@ Thumbs.db
 *.bak
 *.orig
 
+!results/scaling/
+!results/scaling/*.csv
+!results/scaling/*.png
+!results/scaling/*.svg
+!results/profiling/README.md
+!results/*.png
+!results/*.svg
