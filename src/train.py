@@ -43,7 +43,7 @@ def setup_ddp(rank, world_size, master_addr='localhost', master_port='29500'):
     os.environ['MASTER_PORT'] = master_port
     
     torch.distributed.init_process_group(
-        backend='nccl',
+        backend=os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo"),
         init_method=f'tcp://{master_addr}:{master_port}',
         rank=rank,
         world_size=world_size
