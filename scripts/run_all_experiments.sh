@@ -1,165 +1,171 @@
 #!/bin/bash
-# Master script to run all experiments
-# This script coordinates the full experimental workflow
+###############################################################################
+# Run All Experiments Script
+#
+# Submits all required experiments for the HPC Final Project:
+# 1. Baseline training (1 node)
+# 2. Strong scaling (1, 2, 4 nodes)
+# 3. Weak scaling (1, 2, 4 nodes)
+# 4. Profiling run
+#
+# Usage: ./scripts/run_all_experiments.sh [--dry-run]
+###############################################################################
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${PROJECT_DIR}"
 
+DRY_RUN=false
+if [[ "$1" == "--dry-run" ]]; then
+    DRY_RUN=true
+    echo "DRY RUN MODE - Jobs will not be submitted"
+fi
+
 echo "=============================================="
-echo "DCRNN HPC Experiment Suite"
+echo "HPC Final Project - Full Experiment Suite"
 echo "=============================================="
-echo "Project directory: ${PROJECT_DIR}"
+echo "Project: ${PROJECT_DIR}"
+echo "Date: $(date)"
 echo ""
 
-# Check for required files
-if [ ! -f "run.sh" ]; then
-    echo "Error: run.sh not found. Are you in the project root?"
+# Check prerequisites
+echo "Checking prerequisites..."
+
+# Check for container or working Python
+if [ -f "env/project.sif" ]; then
+    echo "✓ Container found: env/project.sif"
+elif python -c "import torch" 2>/dev/null; then
+    echo "✓ PyTorch available (no container)"
+else
+    echo "✗ No container and PyTorch not available"
+    echo "  Build container: ./run.sh build"
+    echo "  Or install PyTorch: pip install torch"
     exit 1
 fi
 
-# Parse arguments
-RUN_BASELINE=false
-RUN_STRONG=false
-RUN_WEAK=false
-RUN_SENSITIVITY=false
-RUN_ALL=false
-GENERATE_DATA=false
-BUILD_CONTAINER=false
-
-usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --all           Run all experiments"
-    echo "  --baseline      Run baseline (1 node) experiment"
-    echo "  --strong        Run strong scaling experiments"
-    echo "  --weak          Run weak scaling experiments"
-    echo "  --sensitivity   Run sensitivity sweep"
-    echo "  --data          Generate sample data"
-    echo "  --build         Build container"
-    echo "  --help          Show this help message"
-    echo ""
-    echo "Example:"
-    echo "  $0 --build --data --baseline"
-    echo "  $0 --all"
-}
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --all)
-            RUN_ALL=true
-            shift
-            ;;
-        --baseline)
-            RUN_BASELINE=true
-            shift
-            ;;
-        --strong)
-            RUN_STRONG=true
-            shift
-            ;;
-        --weak)
-            RUN_WEAK=true
-            shift
-            ;;
-        --sensitivity)
-            RUN_SENSITIVITY=true
-            shift
-            ;;
-        --data)
-            GENERATE_DATA=true
-            shift
-            ;;
-        --build)
-            BUILD_CONTAINER=true
-            shift
-            ;;
-        --help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            exit 1
-            ;;
-    esac
-done
-
-if $RUN_ALL; then
-    BUILD_CONTAINER=true
-    GENERATE_DATA=true
-    RUN_BASELINE=true
-    RUN_STRONG=true
-    RUN_WEAK=true
-    RUN_SENSITIVITY=true
-fi
-
-# Step 1: Build container
-if $BUILD_CONTAINER; then
-    echo ""
-    echo "Step 1: Building container..."
-    echo "=============================="
-    ./run.sh build
-fi
-
-# Step 2: Generate data
-if $GENERATE_DATA; then
-    echo ""
-    echo "Step 2: Generating sample data..."
-    echo "=================================="
-    cd data
-    ./run.sh python generate_sample_data.py || python3 generate_sample_data.py
-    cd ..
-fi
-
-# Step 3: Run baseline
-if $RUN_BASELINE; then
-    echo ""
-    echo "Step 3: Submitting baseline experiment..."
-    echo "=========================================="
-    cd slurm
-    JOB_ID=$(sbatch baseline_1node.sbatch | awk '{print $4}')
-    echo "Baseline job submitted: ${JOB_ID}"
-    cd ..
-fi
-
-# Step 4: Run strong scaling
-if $RUN_STRONG; then
-    echo ""
-    echo "Step 4: Submitting strong scaling experiments..."
-    echo "================================================="
-    ./scripts/strong_scaling.sh
-fi
-
-# Step 5: Run weak scaling
-if $RUN_WEAK; then
-    echo ""
-    echo "Step 5: Submitting weak scaling experiments..."
-    echo "==============================================="
-    ./scripts/weak_scaling.sh
-fi
-
-# Step 6: Run sensitivity sweep
-if $RUN_SENSITIVITY; then
-    echo ""
-    echo "Step 6: Submitting sensitivity sweep..."
-    echo "========================================"
-    ./scripts/sensitivity_sweep.sh
+# Check for data
+if [ -f "data/processed/train.npz" ]; then
+    echo "✓ Training data found"
+else
+    echo "✗ Training data not found"
+    echo "  Generate data: cd data && python generate_sample_data.py"
+    exit 1
 fi
 
 echo ""
+
+###############################################################################
+# Submit Experiments
+###############################################################################
+
+ALL_JOBS=()
+
+submit_job() {
+    local script=$1
+    local name=$2
+    
+    if [ ! -f "$script" ]; then
+        echo "  ✗ Script not found: $script"
+        return
+    fi
+    
+    if [ "$DRY_RUN" = true ]; then
+        echo "  Would submit: $script"
+    else
+        JOBID=$(sbatch "$script" 2>&1 | awk '{print $4}')
+        if [ -n "$JOBID" ]; then
+            echo "  ✓ Submitted $name: Job $JOBID"
+            ALL_JOBS+=("$JOBID")
+        else
+            echo "  ✗ Failed to submit $name"
+        fi
+    fi
+}
+
+# 1. Baseline training
+echo "1. Submitting baseline training (1 node)..."
+submit_job "slurm/baseline_1node.sbatch" "Baseline"
+echo ""
+
+# Wait a bit to avoid port conflicts
+sleep 2
+
+# 2. Strong scaling experiments
+echo "2. Submitting strong scaling experiments..."
+
+# Check for individual scaling scripts or generate them
+if [ -f "slurm/strong_scaling_1n.sbatch" ]; then
+    submit_job "slurm/strong_scaling_1n.sbatch" "Strong-1n"
+    sleep 2
+    submit_job "slurm/strong_scaling_2n.sbatch" "Strong-2n"
+    sleep 2
+    submit_job "slurm/strong_scaling_4n.sbatch" "Strong-4n"
+else
+    # Use the shell script to generate and submit
+    if [ "$DRY_RUN" = true ]; then
+        ./scripts/strong_scaling.sh --dry-run
+    else
+        echo "  Running strong_scaling.sh to generate and submit jobs..."
+        ./scripts/strong_scaling.sh 2>&1 | grep -E "Submitted|Would submit"
+    fi
+fi
+echo ""
+
+sleep 2
+
+# 3. Weak scaling experiments
+echo "3. Submitting weak scaling experiments..."
+
+if [ -f "slurm/weak_scaling_1n.sbatch" ]; then
+    submit_job "slurm/weak_scaling_1n.sbatch" "Weak-1n"
+    sleep 2
+    submit_job "slurm/weak_scaling_2n.sbatch" "Weak-2n"
+    sleep 2
+    submit_job "slurm/weak_scaling_4n.sbatch" "Weak-4n"
+else
+    if [ "$DRY_RUN" = true ]; then
+        ./scripts/weak_scaling.sh --dry-run
+    else
+        echo "  Running weak_scaling.sh to generate and submit jobs..."
+        ./scripts/weak_scaling.sh 2>&1 | grep -E "Submitted|Would submit"
+    fi
+fi
+echo ""
+
+# 4. DDP test (2 nodes)
+echo "4. Submitting DDP test (2 nodes)..."
+submit_job "slurm/ddp_2node.sbatch" "DDP-2n"
+echo ""
+
+###############################################################################
+# Summary
+###############################################################################
+
 echo "=============================================="
-echo "Experiment submission complete!"
+echo "Experiment Submission Summary"
 echo "=============================================="
+
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN - No jobs submitted"
+else
+    echo "Jobs submitted: ${#ALL_JOBS[@]}"
+    if [ ${#ALL_JOBS[@]} -gt 0 ]; then
+        echo "Job IDs: ${ALL_JOBS[*]}"
+    fi
+fi
+
 echo ""
 echo "Monitor jobs:"
 echo "  squeue -u \$USER"
 echo ""
-echo "After completion, analyze results:"
+echo "Check outputs:"
+echo "  tail -f results/*.out"
+echo ""
+echo "After all jobs complete, analyze results:"
 echo "  python scripts/analyze_scaling.py --results results/strong_scaling_* --type strong"
 echo "  python scripts/analyze_scaling.py --results results/weak_scaling_* --type weak"
-echo "  python scripts/analyze_scaling.py --results results/sensitivity_* --type sensitivity"
+echo "  python scripts/analyze_profiling.py --results results/baseline_*/"
+echo ""
+echo "=============================================="

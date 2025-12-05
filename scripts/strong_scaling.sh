@@ -1,129 +1,198 @@
 #!/bin/bash
-# Strong scaling experiment: fixed problem size, varying number of nodes
+###############################################################################
+# Strong Scaling Experiment Script
+# 
+# Purpose: Measure how training time decreases as we add more nodes
+#          while keeping the total problem size (dataset) constant.
+#
+# Usage: ./scripts/strong_scaling.sh [--dry-run]
+###############################################################################
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${PROJECT_DIR}"
 
-# Configuration
-ACCOUNT="<account>"
-PARTITION="<partition>"
-NODES_LIST=(1 2 4)  # Adjust based on quota
-GPUS_PER_NODE=4
-CPUS_PER_TASK=8
-BATCH_SIZE=32  # Fixed per GPU
-EPOCHS=1
-PRECISION="bf16"
-NUM_WORKERS=4
+# Configuration - adjust for your cluster
+PARTITION="${PARTITION:-gpu-node}"
+ACCOUNT="${ACCOUNT:-}"  # Set if required by your cluster
+TIME_LIMIT="02:00:00"
+MEM_PER_NODE="32G"
 
-# Fixed problem size
-NUM_NODES_GRAPH=50
-SEQ_LEN=12
-PRED_LEN=1
+# Experiment configuration
+NODES_LIST=(1 2 4)  # Number of nodes to test (add 8 if available)
+EPOCHS=20           # Enough epochs to get stable timing
+BATCH_SIZE=32       # Fixed batch size per GPU for strong scaling
+SEED=42
 
-echo "Starting strong scaling experiments..."
-echo "Nodes to test: ${NODES_LIST[@]}"
-echo "Fixed batch size per GPU: ${BATCH_SIZE}"
-
-# Create results directory
-RESULTS_BASE="./results/strong_scaling_$(date +%Y%m%d_%H%M%S)"
+# Output directory
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+RESULTS_BASE="results/strong_scaling_${TIMESTAMP}"
 mkdir -p "${RESULTS_BASE}"
 
-# Run experiments for each node count
-for NODES in "${NODES_LIST[@]}"; do
-    echo ""
-    echo "=========================================="
-    echo "Running strong scaling: ${NODES} node(s)"
-    echo "=========================================="
-    
-    JOB_NAME="dcrnn-strong-${NODES}n"
-    RESULTS_DIR="${RESULTS_BASE}/${NODES}nodes"
-    mkdir -p "${RESULTS_DIR}"
-    
-    # Create temporary sbatch script
-    SBATCH_SCRIPT="${RESULTS_DIR}/job.sbatch"
-    cat > "${SBATCH_SCRIPT}" << EOF
-#!/bin/bash
-#SBATCH --job-name=${JOB_NAME}
-#SBATCH --account=${ACCOUNT}
-#SBATCH --partition=${PARTITION}
-#SBATCH --nodes=${NODES}
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=${GPUS_PER_NODE}
-#SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=${CPUS_PER_TASK}
-#SBATCH --time=01:00:00
-#SBATCH --output=${RESULTS_DIR}/slurm_%j.out
-#SBATCH --error=${RESULTS_DIR}/slurm_%j.err
-
-export OMP_NUM_THREADS=${CPUS_PER_TASK}
-export NCCL_DEBUG=INFO
-
-cd "${PROJECT_DIR}"
-
-MASTER_ADDR=\$(scontrol show hostnames "\$SLURM_JOB_NODELIST" | head -n 1)
-MASTER_PORT=29500
-
-if [ ${NODES} -eq 1 ]; then
-    # Single node: use DataParallel
-    ./run.sh python src/train.py \
-      --data ./data \
-      --epochs ${EPOCHS} \
-      --batch-size ${BATCH_SIZE} \
-      --precision ${PRECISION} \
-      --num-workers ${NUM_WORKERS} \
-      --results "${RESULTS_DIR}" \
-      --seed 42 \
-      --monitor-gpu \
-      --monitor-cpu
-else
-    # Multi-node: use DDP
-    srun --ntasks-per-node=4 --gpus-per-task=1 \
-      ./run.sh python -m torch.distributed.run \
-      --nproc_per_node=4 \
-      --nnodes=${NODES} \
-      --node_rank=\${SLURM_NODEID} \
-      --master_addr=\${MASTER_ADDR} \
-      --master_port=\${MASTER_PORT} \
-      src/train.py \
-      --data ./data \
-      --epochs ${EPOCHS} \
-      --batch-size ${BATCH_SIZE} \
-      --precision ${PRECISION} \
-      --num-workers ${NUM_WORKERS} \
-      --results "${RESULTS_DIR}" \
-      --seed 42 \
-      --monitor-gpu \
-      --monitor-cpu
+DRY_RUN=false
+if [[ "$1" == "--dry-run" ]]; then
+    DRY_RUN=true
+    echo "DRY RUN MODE - Jobs will not be submitted"
 fi
 
-sacct -j \${SLURM_JOB_ID} --format=JobID,JobName,State,ExitCode,Elapsed,TotalCPU,MaxRSS,MaxVMSize,ReqMem,AllocCPUs,AllocGRES,NodeList > "${RESULTS_DIR}/sacct_summary.txt"
+echo "=============================================="
+echo "Strong Scaling Experiment"
+echo "=============================================="
+echo "Project directory: ${PROJECT_DIR}"
+echo "Results directory: ${RESULTS_BASE}"
+echo "Partition: ${PARTITION}"
+echo "Nodes to test: ${NODES_LIST[*]}"
+echo "Epochs per run: ${EPOCHS}"
+echo "Batch size per GPU: ${BATCH_SIZE}"
+echo "=============================================="
+echo ""
+
+# Generate sbatch scripts and submit jobs
+JOBIDS=()
+for NODES in "${NODES_LIST[@]}"; do
+    RESULTS_DIR="${RESULTS_BASE}/${NODES}n"
+    mkdir -p "${RESULTS_DIR}"
+    
+    SBATCH_FILE="${RESULTS_DIR}/submit.sbatch"
+    
+    # Calculate effective batch size (same data, split across GPUs)
+    # For strong scaling, total work is constant
+    
+    cat > "${SBATCH_FILE}" << EOF
+#!/bin/bash
+#SBATCH --job-name=strong-${NODES}n
+#SBATCH --partition=${PARTITION}
+${ACCOUNT:+#SBATCH --account=${ACCOUNT}}
+#SBATCH --nodes=${NODES}
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --mem=${MEM_PER_NODE}
+#SBATCH --time=${TIME_LIMIT}
+#SBATCH --output=${RESULTS_DIR}/job_%j.out
+#SBATCH --error=${RESULTS_DIR}/job_%j.err
+#SBATCH --exclusive
+
+echo "Strong Scaling: ${NODES} nodes"
+echo "Job ID: \${SLURM_JOB_ID}"
+echo "Start: \$(date)"
+
+cd "${PROJECT_DIR}"
+source env/load_modules.sh
+
+# Set up DDP environment
+MASTER_ADDR=\$(scontrol show hostnames "\$SLURM_JOB_NODELIST" | head -n 1)
+MASTER_PORT=29500
+export MASTER_ADDR MASTER_PORT
+export WORLD_SIZE=${NODES}
+export NCCL_DEBUG=WARN
+
+echo "Master: \${MASTER_ADDR}:\${MASTER_PORT}"
+
+# Container or direct execution
+CONTAINER_PATH="${PROJECT_DIR}/env/project.sif"
+if [ -f "\${CONTAINER_PATH}" ]; then
+    RUN_CMD="apptainer exec --nv --bind ${PROJECT_DIR}:/workspace --pwd /workspace \${CONTAINER_PATH}"
+else
+    RUN_CMD=""
+fi
+
+# Run training
+if [ ${NODES} -eq 1 ]; then
+    # Single node - no DDP
+    \${RUN_CMD} python src/train.py \\
+        --data ./data \\
+        --epochs ${EPOCHS} \\
+        --batch-size ${BATCH_SIZE} \\
+        --precision fp32 \\
+        --num-workers 4 \\
+        --results ${RESULTS_DIR} \\
+        --seed ${SEED} \\
+        --monitor-gpu \\
+        --monitor-cpu
+else
+    # Multi-node DDP
+    srun --ntasks-per-node=1 --export=ALL bash -c '
+        export RANK=\${SLURM_PROCID}
+        export LOCAL_RANK=\${SLURM_LOCALID}
+        
+        cd ${PROJECT_DIR}
+        
+        if [ -f "${PROJECT_DIR}/env/project.sif" ]; then
+            apptainer exec --nv --bind ${PROJECT_DIR}:/workspace --pwd /workspace ${PROJECT_DIR}/env/project.sif \\
+                python src/train.py \\
+                --data ./data \\
+                --epochs ${EPOCHS} \\
+                --batch-size ${BATCH_SIZE} \\
+                --precision fp32 \\
+                --num-workers 4 \\
+                --results ${RESULTS_DIR} \\
+                --seed ${SEED} \\
+                --rank \${RANK} \\
+                --world-size ${NODES} \\
+                --master-addr \${MASTER_ADDR} \\
+                --master-port \${MASTER_PORT} \\
+                \$([ \${RANK} -eq 0 ] && echo "--monitor-gpu --monitor-cpu")
+        else
+            python src/train.py \\
+                --data ./data \\
+                --epochs ${EPOCHS} \\
+                --batch-size ${BATCH_SIZE} \\
+                --precision fp32 \\
+                --num-workers 4 \\
+                --results ${RESULTS_DIR} \\
+                --seed ${SEED} \\
+                --rank \${RANK} \\
+                --world-size ${NODES} \\
+                --master-addr \${MASTER_ADDR} \\
+                --master-port \${MASTER_PORT} \\
+                \$([ \${RANK} -eq 0 ] && echo "--monitor-gpu --monitor-cpu")
+        fi
+    '
+fi
+
+echo "End: \$(date)"
+
+# Save accounting
+sacct -j \${SLURM_JOB_ID} --format=JobID,JobName,State,ExitCode,Elapsed,TotalCPU,MaxRSS,AllocGRES \\
+    > ${RESULTS_DIR}/sacct.txt 2>/dev/null
+
+# Save metadata
+cat > ${RESULTS_DIR}/metadata.txt << METADATA
+experiment: strong_scaling
+nodes: ${NODES}
+epochs: ${EPOCHS}
+batch_size_per_gpu: ${BATCH_SIZE}
+effective_batch_size: \$((${BATCH_SIZE} * ${NODES}))
+seed: ${SEED}
+job_id: \${SLURM_JOB_ID}
+METADATA
 EOF
+
+    chmod +x "${SBATCH_FILE}"
     
-    chmod +x "${SBATCH_SCRIPT}"
-    
-    # Submit job
-    echo "Submitting job for ${NODES} node(s)..."
-    JOB_ID=$(sbatch "${SBATCH_SCRIPT}" | awk '{print $4}')
-    echo "Job ID: ${JOB_ID}"
-    echo "Results will be saved to: ${RESULTS_DIR}"
-    
-    # Wait for job to complete (optional - remove if you want to submit all at once)
-    # echo "Waiting for job to complete..."
-    # squeue -j ${JOB_ID} 2>/dev/null || true
+    if [ "${DRY_RUN}" = true ]; then
+        echo "Would submit: ${SBATCH_FILE}"
+    else
+        JOBID=$(sbatch "${SBATCH_FILE}" | awk '{print $4}')
+        JOBIDS+=("${JOBID}")
+        echo "Submitted ${NODES}-node job: ${JOBID}"
+    fi
 done
 
-echo ""
-echo "=========================================="
-echo "All strong scaling jobs submitted!"
-echo "Results base directory: ${RESULTS_BASE}"
-echo "=========================================="
-echo ""
-echo "To check job status:"
-echo "  squeue -u \$USER"
-echo ""
-echo "To collect results after jobs complete, run:"
-echo "  python scripts/analyze_scaling.py --results ${RESULTS_BASE} --type strong"
-
+if [ "${DRY_RUN}" = false ] && [ ${#JOBIDS[@]} -gt 0 ]; then
+    echo ""
+    echo "=============================================="
+    echo "Submitted ${#JOBIDS[@]} jobs: ${JOBIDS[*]}"
+    echo "Monitor with: squeue -u \$USER"
+    echo "Results will be in: ${RESULTS_BASE}"
+    echo ""
+    echo "After completion, analyze with:"
+    echo "  python scripts/analyze_scaling.py --results ${RESULTS_BASE} --type strong"
+    echo "=============================================="
+    
+    # Save job list for later analysis
+    echo "${JOBIDS[*]}" > "${RESULTS_BASE}/job_ids.txt"
+fi

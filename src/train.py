@@ -38,19 +38,47 @@ except ImportError:
 
 
 def setup_ddp(rank, world_size, master_addr='localhost', master_port='29500'):
-    """Initialize distributed process group"""
+    """Initialize distributed process group with robust error handling"""
     os.environ['MASTER_ADDR'] = master_addr
-    os.environ['MASTER_PORT'] = master_port
+    os.environ['MASTER_PORT'] = str(master_port)
+    os.environ['RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
     
-    torch.distributed.init_process_group(
-        backend=os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo"),
-        init_method=f'tcp://{master_addr}:{master_port}',
-        rank=rank,
-        world_size=world_size
-    )
+    # Determine backend
+    if torch.cuda.is_available():
+        backend = os.environ.get("BACKEND", "nccl")
+        # Verify CUDA device is accessible
+        try:
+            device_count = torch.cuda.device_count()
+            if device_count == 0:
+                print(f"Warning: CUDA available but no devices found, falling back to gloo")
+                backend = "gloo"
+        except Exception as e:
+            print(f"Warning: CUDA error ({e}), falling back to gloo")
+            backend = "gloo"
+    else:
+        backend = "gloo"
     
-    # Set device for this process
-    torch.cuda.set_device(rank % torch.cuda.device_count())
+    print(f"Rank {rank}: Initializing DDP with backend={backend}, master={master_addr}:{master_port}")
+    
+    try:
+        torch.distributed.init_process_group(
+            backend=backend,
+            init_method=f'tcp://{master_addr}:{master_port}',
+            rank=rank,
+            world_size=world_size,
+            timeout=torch.distributed.default_pg_timeout
+        )
+        print(f"Rank {rank}: DDP initialized successfully")
+    except Exception as e:
+        print(f"Rank {rank}: Failed to initialize DDP: {e}")
+        raise
+    
+    # Set device for this process (only for CUDA)
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        local_rank = rank % torch.cuda.device_count()
+        torch.cuda.set_device(local_rank)
+        print(f"Rank {rank}: Using GPU {local_rank} ({torch.cuda.get_device_name(local_rank)})")
 
 
 def cleanup_ddp():
