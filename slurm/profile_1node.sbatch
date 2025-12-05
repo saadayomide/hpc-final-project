@@ -107,7 +107,8 @@ nsys profile \
     --num-workers 6 \
     --results "${RESULTS_DIR}" \
     --seed 42 \
-    --profile-steps ${NUM_STEPS_PROFILE}
+    --monitor-gpu \
+    --monitor-cpu
 
 PROFILE_EXIT=$?
 

@@ -108,7 +108,8 @@ if [ "${SLURM_NODEID}" -eq 0 ] && [ "${SLURM_PROCID}" -eq 0 ]; then
         --num-workers 6 \
         --results "${RESULTS_DIR}" \
         --seed 42 \
-        --profile-steps ${NUM_STEPS_PROFILE}
+        --monitor-gpu \
+        --monitor-cpu
 else
     # Other ranks - run without profiling
     srun --ntasks-per-node=4 --gpus-per-task=1 \
@@ -127,7 +128,8 @@ else
       --num-workers 6 \
       --results "${RESULTS_DIR}" \
       --seed 42 \
-      --profile-steps ${NUM_STEPS_PROFILE}
+      --monitor-gpu \
+      --monitor-cpu
 fi
 
 PROFILE_EXIT=$?
