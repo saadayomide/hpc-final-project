@@ -23,13 +23,24 @@ This document lists all remaining tasks required to reach 100% project completio
 ### Task 1: Execute and Verify Multi-Node Training (≥2 nodes)
 **Priority:** 🔴 CRITICAL  
 **Requirement:** "Runs on ≥2 nodes under Slurm"  
-**Status:** ⚠️ Only 1-node baseline exists  
+**Status:** ✅ Code complete, ready for cluster execution  
 **Blocking:** Scaling experiments, profiling, bottleneck analysis
 
-#### Actions:
+#### ✅ Code Implementation Complete:
+- Fixed CPU DDP support in `src/train.py`
+- Enhanced `slurm/ddp_2node_cpu.sbatch` script
+- Created `scripts/verify_multinode.sh` verification script
+- Created `scripts/run_multinode.sh` helper script
+- Created `docs/MULTINODE_EXECUTION.md` documentation
+- Verified backward compatibility (no breaking changes)
+
+#### Actions (On Cluster):
 1. **Execute CPU DDP multi-node run:**
    ```bash
-   # On cluster
+   # Option 1: Use helper script (recommended)
+   ./scripts/run_multinode.sh
+   
+   # Option 2: Direct submission
    sbatch slurm/ddp_2node_cpu.sbatch
    
    # Monitor job
@@ -38,23 +49,32 @@ This document lists all remaining tasks required to reach 100% project completio
    ```
 
 2. **Verify job completes successfully:**
-   - Check exit code: `sacct -j <JOBID> --format=JobID,State,ExitCode`
-   - Verify output files exist: `ls -la results/ddp_*/`
-   - Check for metrics CSV: `ls results/ddp_*/metrics.csv`
+   ```bash
+   # Use automatic verification
+   ./scripts/verify_multinode.sh <JOB_ID>
+   
+   # Or manual checks
+   sacct -j <JOBID> --format=JobID,State,ExitCode
+   ls -la results/ddp_cpu_*/
+   ```
 
 3. **Document results:**
    - Record job ID, nodes used, completion status
-   - Save SLURM accounting: `sacct -j <JOBID> --format=ALL > results/ddp_*/sacct_summary.txt`
-   - Note: CPU DDP is acceptable if GPU DDP fails (document why)
+   - Results automatically saved to `results/ddp_cpu_<JOB_ID>/`
+   - SLURM accounting saved automatically
 
 #### Deliverables:
-- [ ] Multi-node job output files (`results/ddp_*/`)
-- [ ] Metrics CSV from multi-node run
-- [ ] SLURM accounting summary
-- [ ] Documentation of CPU DDP as working solution (if GPU fails)
+- [x] Code fixes and enhancements complete
+- [x] Verification script created
+- [x] Helper script created
+- [x] Documentation created
+- [ ] **Multi-node job executed on cluster** (requires cluster access)
+- [ ] **Results verified** (use verification script)
+- [ ] **Job ID documented** (add to EXECUTION_SUMMARY.md)
 
 #### Time Estimate: 30-60 minutes (job execution + verification)
 #### Dependencies: None (can start immediately)
+#### See: `TASK1_COMPLETION_SUMMARY.md` for detailed changes
 
 ---
 

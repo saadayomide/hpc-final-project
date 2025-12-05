@@ -69,4 +69,23 @@ python src/train.py \
 '
 
 echo "Training completed. Results: ${RESULTS_DIR}"
-sacct -j "${SLURM_JOB_ID}" --format=JobID,JobName,State,Elapsed > "${RESULTS_DIR}/sacct.txt" 2>/dev/null
+echo "End time: $(date)"
+
+# Save comprehensive SLURM accounting
+echo "Saving SLURM accounting information..."
+sacct -j "${SLURM_JOB_ID}" --format=JobID,JobName,State,ExitCode,Elapsed,TotalCPU,MaxRSS,NNodes,NTasks,ReqNodes > "${RESULTS_DIR}/sacct_summary.txt" 2>/dev/null || true
+
+# Verify results
+if [ -f "${RESULTS_DIR}/metrics.csv" ]; then
+    echo "✓ Metrics CSV found"
+    echo "Results summary:"
+    tail -n 1 "${RESULTS_DIR}/metrics.csv" | head -c 200
+    echo ""
+else
+    echo "⚠ WARNING: metrics.csv not found"
+fi
+
+echo "=============================================="
+echo "Job ${SLURM_JOB_ID} completed"
+echo "Results directory: ${RESULTS_DIR}"
+echo "=============================================="

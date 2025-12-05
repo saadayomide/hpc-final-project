@@ -42,15 +42,19 @@ def setup_ddp(rank, world_size, master_addr='localhost', master_port='29500'):
     os.environ['MASTER_ADDR'] = master_addr
     os.environ['MASTER_PORT'] = master_port
     
+    # Determine backend: use BACKEND env var if set, otherwise auto-detect
+    backend = os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo")
+    
     torch.distributed.init_process_group(
-        backend=os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo"),
+        backend=backend,
         init_method=f'tcp://{master_addr}:{master_port}',
         rank=rank,
         world_size=world_size
     )
     
-    # Set device for this process
-    torch.cuda.set_device(rank % torch.cuda.device_count())
+    # Set CUDA device only if using CUDA backend
+    if backend == "nccl" and torch.cuda.is_available():
+        torch.cuda.set_device(rank % torch.cuda.device_count())
 
 
 def cleanup_ddp():
@@ -270,6 +274,9 @@ def main():
     
     # Determine if DDP is being used
     use_ddp = False
+    backend = os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo")
+    use_cuda = backend == "nccl" and torch.cuda.is_available()
+    
     if args.local_rank != -1 or 'RANK' in os.environ:
         use_ddp = True
         if args.local_rank == -1:
@@ -280,8 +287,13 @@ def main():
             args.world_size = int(os.environ.get('WORLD_SIZE', 1))
         
         setup_ddp(args.rank, args.world_size, args.master_addr, args.master_port)
-        device = torch.device(f'cuda:{args.local_rank}')
-        torch.cuda.set_device(args.local_rank)
+        
+        # Set device based on backend
+        if use_cuda:
+            device = torch.device(f'cuda:{args.local_rank}')
+            torch.cuda.set_device(args.local_rank)
+        else:
+            device = torch.device('cpu')
     else:
         args.rank = 0
         args.world_size = 1
@@ -365,13 +377,16 @@ def main():
     
     # Create data loaders
     from torch.utils.data import DataLoader
+    # pin_memory only works with CUDA
+    pin_memory = use_cuda if use_ddp else (torch.cuda.is_available() if not use_ddp else False)
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         num_workers=args.num_workers,
-        pin_memory=True if torch.cuda.is_available() else False,
+        pin_memory=pin_memory,
         drop_last=False
     )
     val_loader = DataLoader(
@@ -380,7 +395,7 @@ def main():
         shuffle=False,
         sampler=val_sampler,
         num_workers=args.num_workers,
-        pin_memory=True if torch.cuda.is_available() else False,
+        pin_memory=pin_memory,
         drop_last=False
     )
     
@@ -401,9 +416,13 @@ def main():
     # Wrap with DDP if using distributed training
     if use_ddp:
         model = model.to(device)
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        # For CPU training (gloo backend), don't specify device_ids
+        if use_cuda:
+            model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        else:
+            model = DDP(model)
         if args.rank == 0:
-            print(f"Using DDP with {args.world_size} processes")
+            print(f"Using DDP with {args.world_size} processes (backend: {backend})")
     else:
         # Single node multi-GPU
         if num_gpus > 1:
