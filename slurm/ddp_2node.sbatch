@@ -32,17 +32,24 @@ mkdir -p results
 RESULTS_DIR="./results/ddp_${SLURM_JOB_ID}"
 mkdir -p "${RESULTS_DIR}"
 
-# Install CUDA-enabled PyTorch if not already installed
-echo "Setting up CUDA PyTorch on all nodes..."
+# Check GPU availability and PyTorch setup
+echo "Checking GPU and PyTorch setup on all nodes..."
 srun --ntasks-per-node=1 bash -c '
-    # Check if CUDA torch is already available
-    if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-        echo "Installing PyTorch with CUDA on $(hostname)..."
-        pip uninstall -y torch 2>/dev/null
-        pip install --user torch==2.1.0+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 --quiet
+    echo "Node $(hostname):"
+    echo "  Checking nvidia-smi..."
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "  WARNING: nvidia-smi failed or no GPUs found"
+    
+    echo "  Checking PyTorch..."
+    if python -c "import torch; print(f\"PyTorch {torch.__version__}\"); assert torch.cuda.is_available(), \"CUDA not available\"" 2>/dev/null; then
+        python -c "import torch; print(f\"  CUDA available: {torch.cuda.is_available()}\"); print(f\"  GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \\\"None\\\"}\")"
+    else
+        echo "  WARNING: PyTorch CUDA check failed"
+        echo "  Attempting CPU training with gloo backend"
+        export BACKEND=gloo
     fi
-    python -c "import torch; print(f\"$(hostname): CUDA={torch.cuda.is_available()}, Device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}\")"
+    echo ""
 '
+
 
 # Get master node
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -52,7 +59,22 @@ export MASTER_ADDR
 export MASTER_PORT
 export WORLD_SIZE=${SLURM_NNODES}
 
+# Auto-detect backend if not set
+if [ -z "$BACKEND" ]; then
+    # Check if CUDA is available
+    if python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+        export BACKEND=nccl
+        echo "Auto-detected: Using NCCL backend (GPU available)"
+    else
+        export BACKEND=gloo
+        echo "Auto-detected: Using Gloo backend (CPU training)"
+    fi
+fi
+
+
 echo "Master: ${MASTER_ADDR}:${MASTER_PORT}"
+echo "Backend: ${BACKEND}"
+echo "World Size: ${WORLD_SIZE}"
 echo ""
 echo "Starting distributed training..."
 echo "================================"
@@ -60,7 +82,10 @@ echo "================================"
 srun --export=ALL bash -c '
 export RANK=${SLURM_PROCID}
 export LOCAL_RANK=0
-echo "Node $(hostname): RANK=${RANK}, WORLD_SIZE=${WORLD_SIZE}"
+export BACKEND=${BACKEND:-nccl}
+
+echo "Node $(hostname): RANK=${RANK}, WORLD_SIZE=${WORLD_SIZE}, BACKEND=${BACKEND}"
+
 
 python src/train.py \
     --data ./data \

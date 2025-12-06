@@ -15,14 +15,32 @@ This project implements a distributed deep learning framework for traffic flow p
 3. **Reproducibility**: Containerized solution with fixed seeds and documented configurations
 4. **Performance Analysis**: Comprehensive profiling and bottleneck identification
 
-## 📊 Results Summary
+## 📊 Latest Results
+
+**Validation Run (Dec 5, 2025)**
 
 | Metric | Value |
 |--------|-------|
-| Strong Scaling Efficiency (8 nodes) | 82% |
-| Training Throughput (8 nodes) | 1,600 samples/sec |
-| Test MAE | 3.52 mph |
-| Test RMSE | 5.18 mph |
+| Final Validation MAE | 0.336 |
+| Final Validation RMSE | 0.424 |
+| Training Throughput | 74.65 samples/sec |
+| Best Validation Loss | 0.180 |
+
+**Training Progress (5 epochs)**:
+
+| Epoch | Train Loss | Val Loss | Val MAE | Val RMSE | Throughput |
+|-------|------------|----------|---------|----------|------------|
+| 1 | 0.2246 | 0.1859 | 0.342 | 0.431 | 74.69 s/s |
+| 2 | 0.1775 | 0.1817 | 0.338 | 0.426 | 74.33 s/s |
+| 3 | 0.1762 | 0.1812 | 0.338 | 0.425 | 74.66 s/s |
+| 4 | 0.1751 | 0.1808 | 0.338 | 0.425 | 74.69 s/s |
+| 5 | 0.1746 | 0.1804 | 0.336 | 0.424 | 74.65 s/s |
+
+**Status Summary**:
+- ✅ Single-node training: **Working** (74.65 samples/sec)
+- ✅ Model convergence: **Validated** (loss decreasing)
+- ✅ Data pipeline: **Working** (6039 train, 863 val samples)
+- ✅ Checkpointing: **Working** (best + latest saved)
 
 ## 🏗️ Repository Structure
 
@@ -41,29 +59,22 @@ hpc-final-project/
 ├── slurm/                  # SLURM job scripts
 │   ├── baseline_1node.sbatch
 │   ├── ddp_multi_node.sbatch
-│   ├── strong_scaling_*.sbatch
-│   └── weak_scaling_*.sbatch
+│   ├── full_train_cpu.sbatch  # Production training
+│   └── *.sbatch           # Other job scripts
 ├── scripts/                # Automation scripts
-│   ├── strong_scaling.sh
-│   ├── weak_scaling.sh
-│   ├── sensitivity_sweep.sh
 │   ├── analyze_scaling.py
 │   ├── analyze_profiling.py
-│   └── generate_sample_results.py
+│   └── *.sh               # Experiment runners
 ├── data/                   # Dataset and scripts
-│   ├── fetch_data.sh
+│   ├── processed/         # Preprocessed data
 │   ├── generate_sample_data.py
-│   ├── preprocess_metr_la.py
 │   └── README.md
 ├── results/                # Experiment outputs
-│   ├── scaling/           # Scaling analysis
-│   └── profiling/         # Profiling results
+│   └── quick_test_cpu_4817/ # Latest successful run
 ├── docs/                   # Documentation
-│   ├── paper.md           # 4-6 page paper
-│   ├── eurohpc_proposal.md # EuroHPC proposal
-│   ├── pitch.md           # 5-slide pitch
-│   └── README.md
-├── run.sh                  # Container run wrapper
+│   ├── paper.md           # Research paper
+│   ├── eurohpc_proposal.md
+│   └── pitch.md
 ├── reproduce.md            # Reproduction instructions
 ├── SYSTEM.md              # System configuration
 └── README.md              # This file
@@ -73,9 +84,9 @@ hpc-final-project/
 
 ### Prerequisites
 
-- Access to HPC cluster with GPU nodes
-- SLURM scheduler
-- Apptainer/Singularity
+- HPC cluster with SLURM scheduler
+- Python 3.10+ with PyTorch 2.1+
+- (Optional) Apptainer for containerized execution
 
 ### 1. Clone and Setup
 
@@ -84,74 +95,31 @@ git clone <repository-url>
 cd hpc-final-project
 ```
 
-### 2. Build Container
+### 2. Prepare Data
 
 ```bash
-./run.sh build
-```
-
-### 3. Prepare Data
-
-```bash
-# Option A: Synthetic data (quick start)
 cd data && python generate_sample_data.py && cd ..
-
-# Option B: Real METR-LA data
-cd data && ./fetch_data.sh && cd ..
 ```
 
-### 4. Verify Environment
+### 3. Run Training
 
 ```bash
-./run.sh python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+# Quick test (5 epochs, ~7 min)
+sbatch slurm/quick_test_cpu_fixed.sbatch
+
+# Full training (50 epochs, ~1.2 hours)
+sbatch slurm/full_train_cpu.sbatch
 ```
 
-### 5. Run Training
+### 4. Monitor Job
 
 ```bash
-# Single node
-sbatch slurm/baseline_1node.sbatch
+# Check job status
+squeue -u $USER
 
-# Multi-node DDP
-sbatch slurm/ddp_multi_node.sbatch
+# View output in real-time
+tail -f results/full_train_cpu_*.out
 ```
-
-### 6. Run Experiments
-
-```bash
-# Strong scaling
-./scripts/strong_scaling.sh
-
-# Weak scaling
-./scripts/weak_scaling.sh
-
-# Analyze results
-python scripts/analyze_scaling.py --results results/strong_scaling_* --type strong
-```
-
-## 📈 Scaling Experiments
-
-### Strong Scaling
-
-Fixed problem size, increasing nodes:
-
-| Nodes | Time (s) | Speedup | Efficiency |
-|-------|----------|---------|------------|
-| 1 | 120.0 | 1.00× | 100% |
-| 2 | 62.4 | 1.92× | 96% |
-| 4 | 33.1 | 3.63× | 91% |
-| 8 | 19.4 | 6.19× | 82% |
-
-### Weak Scaling
-
-Fixed work per GPU, increasing nodes:
-
-| Nodes | Time (s) | Throughput | Efficiency |
-|-------|----------|------------|------------|
-| 1 | 120.0 | 42 s/s | 100% |
-| 2 | 123.6 | 81 s/s | 97% |
-| 4 | 129.8 | 154 s/s | 93% |
-| 8 | 139.2 | 288 s/s | 86% |
 
 ## 🔧 Model Architecture
 
@@ -159,7 +127,7 @@ Fixed work per GPU, increasing nodes:
 
 - Input: 12 timesteps (1 hour) of traffic speed data
 - Output: 1 timestep (5 minutes) prediction
-- Sensors: 207 (METR-LA) or configurable
+- Sensors: 207 (METR-LA dataset)
 - Hidden dimension: 64
 - Layers: 2 DCGRUCells
 
@@ -168,39 +136,6 @@ Key features:
 - GRU captures temporal dynamics
 - Supports mixed-precision training (BF16/FP16)
 
-## 🖥️ Hardware Requirements
-
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| GPUs | 1× NVIDIA V100 | 4× NVIDIA A100 |
-| GPU Memory | 16 GB | 40 GB |
-| RAM | 64 GB | 256 GB |
-| Storage | 50 GB | 200 GB |
-
-## 📖 Documentation
-
-- **[reproduce.md](reproduce.md)**: Step-by-step reproduction instructions
-- **[SYSTEM.md](SYSTEM.md)**: System configuration and requirements
-- **[data/README.md](data/README.md)**: Dataset documentation
-- **[docs/paper.md](docs/paper.md)**: Research paper (4-6 pages)
-- **[docs/eurohpc_proposal.md](docs/eurohpc_proposal.md)**: EuroHPC proposal (6-8 pages)
-- **[docs/pitch.md](docs/pitch.md)**: 5-slide presentation
-
-## 🧪 Testing
-
-```bash
-# Quick functionality test
-./run.sh python src/train.py --epochs 1 --data ./data --results ./results/test
-
-# Full test with monitoring
-./run.sh python src/train.py \
-    --epochs 5 \
-    --data ./data \
-    --results ./results/test \
-    --monitor-gpu \
-    --monitor-cpu
-```
-
 ## 📊 Output Files
 
 Training produces:
@@ -208,57 +143,25 @@ Training produces:
 | File | Description |
 |------|-------------|
 | `metrics.csv` | Per-epoch training metrics |
-| `gpu_monitor.csv` | GPU utilization logs |
 | `cpu_monitor.csv` | CPU utilization logs |
-| `checkpoint_*.pth` | Model checkpoints |
-| `sacct_summary.txt` | SLURM accounting |
+| `checkpoint_best.pth` | Best model checkpoint |
+| `checkpoint_latest.pth` | Latest model checkpoint |
 
-## 🔬 Profiling
+## 📖 Documentation
 
-```bash
-# Run with profiling
-./run.sh python src/train.py \
-    --data ./data \
-    --epochs 10 \
-    --monitor-gpu \
-    --monitor-cpu \
-    --results ./results/profile
-
-# Analyze results
-python scripts/analyze_profiling.py --results ./results/profile
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Submit a pull request
+- **[reproduce.md](reproduce.md)**: Step-by-step reproduction instructions
+- **[SYSTEM.md](SYSTEM.md)**: System configuration and requirements
+- **[data/README.md](data/README.md)**: Dataset documentation
+- **[docs/paper.md](docs/paper.md)**: Research paper
+- **[docs/eurohpc_proposal.md](docs/eurohpc_proposal.md)**: EuroHPC proposal
+- **[docs/pitch.md](docs/pitch.md)**: Presentation slides
 
 ## 📜 License
 
 Apache 2.0 - See [LICENSE](LICENSE) for details.
-
-## 📚 Citation
-
-If you use this code, please cite:
-
-```bibtex
-@misc{hpc-traffic-prediction,
-  title={Scalable AI-Based Traffic Flow Prediction for Urban Digital Twins},
-  author={[Team Name]},
-  year={2024},
-  publisher={GitHub},
-  url={https://github.com/[team]/hpc-traffic-prediction}
-}
-```
 
 ## 🙏 Acknowledgments
 
 - METR-LA dataset from [DCRNN paper](https://github.com/liyaguang/DCRNN)
 - Magic Castle cluster for compute resources
 - PyTorch team for distributed training support
-
-## 📧 Contact
-
-For questions or issues, please open a GitHub issue.

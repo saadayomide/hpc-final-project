@@ -9,6 +9,90 @@ import sys
 import time
 import csv
 import random
+
+# Disable torch.compile/dynamo to avoid triton import issues on CPU
+os.environ['TORCHDYNAMO_DISABLE'] = '1'
+os.environ['PYTORCH_DISABLE_TRITON'] = '1'
+os.environ['TORCH_COMPILE_DEBUG'] = '0'
+
+# Monkey patch to handle triton import errors on CPU
+import sys
+import types
+
+# Prevent torch._dynamo from being imported
+def noop(*args, **kwargs):
+    """No-op function for any dynamo calls"""
+    if args and callable(args[0]):
+        return args[0]  # If first arg is a function, return it unchanged
+    return None
+
+class DynamoStub(types.ModuleType):
+    def __init__(self):
+        super().__init__('torch._dynamo')
+        self.config = types.SimpleNamespace(disable=True)
+    def __getattr__(self, name):
+        # Return noop for any method calls
+        return noop
+    def __call__(self, *args, **kwargs):
+        return noop(*args, **kwargs)
+
+# Register stubs before any torch imports
+sys.modules['torch._dynamo'] = DynamoStub()
+
+def create_module_stub(name, package=None):
+    """Create a stub module that can be imported"""
+    module = types.ModuleType(name)
+    module.__file__ = '<stub>'
+    module.__package__ = package or name.rsplit('.', 1)[0] if '.' in name else ''
+    module.__dict__.update({
+        '__all__': [],
+    })
+    return module
+
+class TritonDtypeStub:
+    """Stub for triton.language.dtype"""
+    def __init__(self):
+        self.dtype = None
+    def __getattr__(self, name):
+        return None
+
+class TritonLanguageStub:
+    """Stub for triton.language"""
+    def __init__(self):
+        self.dtype = TritonDtypeStub()
+    def __getattr__(self, name):
+        return None
+
+class TritonBackendsStub:
+    def __init__(self):
+        self.compiler = create_module_stub('triton.backends.compiler', 'triton.backends')
+    def __getattr__(self, name):
+        return None
+
+class TritonCompilerStub:
+    def __init__(self):
+        self.compiler = create_module_stub('triton.compiler.compiler', 'triton.compiler')
+    def __getattr__(self, name):
+        return None
+
+class TritonStub:
+    def __init__(self):
+        self.backends = TritonBackendsStub()
+        self.language = TritonLanguageStub()
+        self.compiler = TritonCompilerStub()
+    def __getattr__(self, name):
+        return None
+
+# Try to prevent triton import errors - set up stubs before any torch imports
+if 'triton' not in sys.modules:
+    triton_stub = TritonStub()
+    sys.modules['triton'] = triton_stub
+    sys.modules['triton.backends'] = triton_stub.backends
+    sys.modules['triton.backends.compiler'] = triton_stub.backends.compiler
+    sys.modules['triton.language'] = triton_stub.language
+    sys.modules['triton.compiler'] = triton_stub.compiler
+    sys.modules['triton.compiler.compiler'] = triton_stub.compiler.compiler
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -38,23 +122,47 @@ except ImportError:
 
 
 def setup_ddp(rank, world_size, master_addr='localhost', master_port='29500'):
-    """Initialize distributed process group"""
+    """Initialize distributed process group with robust error handling"""
     os.environ['MASTER_ADDR'] = master_addr
-    os.environ['MASTER_PORT'] = master_port
+    os.environ['MASTER_PORT'] = str(master_port)
+    os.environ['RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
     
-    # Determine backend: use BACKEND env var if set, otherwise auto-detect
-    backend = os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo")
+    # Determine backend
+    if torch.cuda.is_available():
+        backend = os.environ.get("BACKEND", "nccl")
+        # Verify CUDA device is accessible
+        try:
+            device_count = torch.cuda.device_count()
+            if device_count == 0:
+                print(f"Warning: CUDA available but no devices found, falling back to gloo")
+                backend = "gloo"
+        except Exception as e:
+            print(f"Warning: CUDA error ({e}), falling back to gloo")
+            backend = "gloo"
+    else:
+        backend = "gloo"
     
-    torch.distributed.init_process_group(
-        backend=backend,
-        init_method=f'tcp://{master_addr}:{master_port}',
-        rank=rank,
-        world_size=world_size
-    )
+    print(f"Rank {rank}: Initializing DDP with backend={backend}, master={master_addr}:{master_port}")
     
-    # Set CUDA device only if using CUDA backend
-    if backend == "nccl" and torch.cuda.is_available():
-        torch.cuda.set_device(rank % torch.cuda.device_count())
+    try:
+        torch.distributed.init_process_group(
+            backend=backend,
+            init_method=f'tcp://{master_addr}:{master_port}',
+            rank=rank,
+            world_size=world_size,
+            timeout=torch.distributed.default_pg_timeout
+        )
+        print(f"Rank {rank}: DDP initialized successfully")
+    except Exception as e:
+        print(f"Rank {rank}: Failed to initialize DDP: {e}")
+        raise
+    
+    # Set device for this process (only for CUDA)
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        local_rank = rank % torch.cuda.device_count()
+        torch.cuda.set_device(local_rank)
+        print(f"Rank {rank}: Using GPU {local_rank} ({torch.cuda.get_device_name(local_rank)})")
 
 
 def cleanup_ddp():
@@ -274,9 +382,6 @@ def main():
     
     # Determine if DDP is being used
     use_ddp = False
-    backend = os.environ.get("BACKEND", "nccl" if torch.cuda.is_available() else "gloo")
-    use_cuda = backend == "nccl" and torch.cuda.is_available()
-    
     if args.local_rank != -1 or 'RANK' in os.environ:
         use_ddp = True
         if args.local_rank == -1:
@@ -287,13 +392,8 @@ def main():
             args.world_size = int(os.environ.get('WORLD_SIZE', 1))
         
         setup_ddp(args.rank, args.world_size, args.master_addr, args.master_port)
-        
-        # Set device based on backend
-        if use_cuda:
-            device = torch.device(f'cuda:{args.local_rank}')
-            torch.cuda.set_device(args.local_rank)
-        else:
-            device = torch.device('cpu')
+        device = torch.device(f'cuda:{args.local_rank}')
+        torch.cuda.set_device(args.local_rank)
     else:
         args.rank = 0
         args.world_size = 1
@@ -344,12 +444,12 @@ def main():
         print("Loading data...")
     
     # Create datasets first to get their size
-    from src.data import DCRNNDataset
-    train_dataset = DCRNNDataset(
+    from src.data import TrafficDataset
+    train_dataset = TrafficDataset(
         args.data, split='train', num_nodes=args.num_nodes,
         seq_len=args.seq_len, pred_len=args.pred_len
     )
-    val_dataset = DCRNNDataset(
+    val_dataset = TrafficDataset(
         args.data, split='val', num_nodes=args.num_nodes,
         seq_len=args.seq_len, pred_len=args.pred_len, num_samples=200
     )
@@ -377,16 +477,13 @@ def main():
     
     # Create data loaders
     from torch.utils.data import DataLoader
-    # pin_memory only works with CUDA
-    pin_memory = use_cuda if use_ddp else (torch.cuda.is_available() if not use_ddp else False)
-    
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         num_workers=args.num_workers,
-        pin_memory=pin_memory,
+        pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False
     )
     val_loader = DataLoader(
@@ -395,7 +492,7 @@ def main():
         shuffle=False,
         sampler=val_sampler,
         num_workers=args.num_workers,
-        pin_memory=pin_memory,
+        pin_memory=True if torch.cuda.is_available() else False,
         drop_last=False
     )
     
@@ -416,13 +513,9 @@ def main():
     # Wrap with DDP if using distributed training
     if use_ddp:
         model = model.to(device)
-        # For CPU training (gloo backend), don't specify device_ids
-        if use_cuda:
-            model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
-        else:
-            model = DDP(model)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
         if args.rank == 0:
-            print(f"Using DDP with {args.world_size} processes (backend: {backend})")
+            print(f"Using DDP with {args.world_size} processes")
     else:
         # Single node multi-GPU
         if num_gpus > 1:
